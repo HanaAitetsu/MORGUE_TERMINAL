@@ -89,8 +89,8 @@ try:
 
     # メイン指標
     c1, c2 = st.columns(2)
-    c1.metric("モルグ価格 (日本円)", f"¥{data['morg_jpy']}")
-    c2.metric("モルグ価格 (米ドル)", f"$ {data['morg_usd']}")
+    c1.metric("MORG/JPY", f"¥{data['morg_jpy']}")
+    c2.metric("MORG/USD", f"$ {data['morg_usd']}")
 
     st.write("##")
 
