@@ -97,8 +97,8 @@ st.write("##")
 
 # メインメトリクス
 c1, c2 = st.columns(2)
-c1.metric("モルグ価格 (日本円)", f"¥{current['morg_jpy']}", delta=f"{get_delta('morg_jpy')} JPY")
-c2.metric("モルグ価格 (米ドル)", f"$ {current['morg_usd']}", delta=f"{get_delta('morg_usd')} USD")
+c1.metric("MORG/JPY", f"¥{current['morg_jpy']}", delta=f"{get_delta('morg_jpy')} JPY")
+c2.metric("MORG/USD", f"$ {current['morg_usd']}", delta=f"{get_delta('morg_usd')} USD")
 
 st.write("##")
 
