@@ -6,52 +6,20 @@
     color: #FFFFFF;
 }
 
-/* ヘッダー周り */
-.header-container {
-    display: flex; 
-    justify-content: space-between; 
-    border-bottom: 1px solid #333; 
-    padding-bottom: 10px;
+/* メトリクス表示の強化 */
+[data-testid="stMetricValue"] {
+    font-size: 56px !important;
+    font-weight: 700 !important;
+}
+
+/* 矢印（Delta）のフォントサイズ */
+[data-testid="stMetricDelta"] {
+    font-size: 18px !important;
     font-family: 'JetBrains Mono', monospace;
 }
 
-.system-title {
-    font-weight: bold; 
-    letter-spacing: 3px;
-    color: #FFFFFF;
-}
-
-.status-tag {
-    color: #00FF00;
-    font-size: 12px;
-}
-
-/* メトリクス（数値）の巨大化と高コントラスト化 */
-[data-testid="stMetricValue"] {
-    font-family: 'Inter', sans-serif !important;
-    font-size: 64px !important; /* 252円がはっきり見えるサイズ */
-    font-weight: 700 !important;
-    color: #FFFFFF !important;
-    letter-spacing: -2px;
-}
-
-[data-testid="stMetricLabel"] {
-    font-family: 'JetBrains Mono', monospace !important;
-    color: #888888 !important;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-}
-
-/* メトリクスを囲む枠 */
 div[data-testid="stMetric"] {
     background-color: #0d0d0d;
-    padding: 30px;
-    border-radius: 4px;
+    padding: 25px;
     border: 1px solid #222;
-}
-
-/* ログセクション */
-.stCodeBlock {
-    background-color: #111 !important;
-    border: 1px solid #333 !important;
 }
