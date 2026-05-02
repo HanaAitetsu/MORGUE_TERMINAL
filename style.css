@@ -2,24 +2,44 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=JetBrains+Mono&display=swap');
 
 .stApp {
-    background-color: #050505;
-    color: #FFFFFF;
+    background-color: #080808; /* 真っ黒から極暗グレーへ */
+    color: #EEEEEE;
 }
 
-/* メトリクス表示の強化 */
+/* 指標ラベルの視認性 */
+[data-testid="stMetricLabel"] {
+    font-family: 'JetBrains Mono', monospace !important;
+    color: #BBBBBB !important; /* 明るめのグレー */
+    font-size: 14px !important;
+    letter-spacing: 1px;
+}
+
+/* 指標数値の強調 */
 [data-testid="stMetricValue"] {
-    font-size: 56px !important;
-    font-weight: 700 !important;
+    font-family: 'Inter', sans-serif !important;
+    color: #FFFFFF !important;
+    font-size: 52px !important;
+    font-weight: 800 !important;
 }
 
-/* 矢印（Delta）のフォントサイズ */
-[data-testid="stMetricDelta"] {
-    font-size: 18px !important;
-    font-family: 'JetBrains Mono', monospace;
-}
-
+/* 指標ボックスの枠線強化 */
 div[data-testid="stMetric"] {
-    background-color: #0d0d0d;
-    padding: 25px;
-    border: 1px solid #222;
+    background-color: #121212;
+    padding: 20px;
+    border: 1px solid #333333;
+    border-radius: 4px;
+}
+
+/* ニュースタイトルの視認性 */
+.news-title {
+    color: #FFFFFF !important;
+    font-weight: bold;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.news-source {
+    color: #FF4B4B !important; /* ニュースソースを赤くして警告色に */
+    font-size: 11px;
+    font-weight: bold;
 }

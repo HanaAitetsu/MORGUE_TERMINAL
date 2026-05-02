@@ -27,15 +27,13 @@ if 'prev_data' not in st.session_state:
 # --- データ取得エンジン ---
 @st.cache_data(ttl=900)
 def fetch_morgue_metrics():
-    # 1. GDELT (世界の混乱指数) - ACLEDの代わり
-    # 直近の「衝突・暴力」に関連するニュースのボリュームを取得
+    # 1. GDELT (世界の暴力・混乱ボリューム)
     conflict_vol = 100
     try:
-        gdelt_url = "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR violence OR attack)&mode=TimelineVol&format=json"
+        gdelt_url = 'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR violence OR "military action")&mode=TimelineVol&format=json'
         res = requests.get(gdelt_url, timeout=10).json()
-        # 最新のデータポイントの数値を採用
         conflict_vol = res['timeline'][0]['data'][-1]['value'] * 10
-    except: conflict_vol = 145 # フォールバック
+    except: conflict_vol = 145.0
 
     # 2. FRED (原油)
     oil_price = 80.0
@@ -44,25 +42,26 @@ def fetch_morgue_metrics():
         oil_price = float(requests.get(fred_url).json()['observations'][0]['value'])
     except: oil_price = 83.1
 
-    # 3. yfinance (軍需株騰落)
+    # 3. yfinance (軍需株)
     iron_idx = 0.0
     try:
         stock = yf.download(["LMT", "RTX", "NOC"], period="1d", interval="5min", progress=False)
         iron_idx = stock['Close'].pct_change().mean(axis=1).iloc[-1] * 100
-    except: iron_idx = 0.2
+    except: iron_idx = 0.15
 
-    # 4. News API (報道圧力 & ヘッドライン)
+    # 4. News API (クエリを厳密化してノイズ除去)
     headlines = []
     press_factor = 1.0
     try:
-        news_url = f'https://newsapi.org/v2/everything?q=(war OR "killed" OR "strike")&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}&pageSize=5'
+        # スポーツ、エンタメ、ストライキを除外
+        q = '("armed conflict" OR "warfare" OR "casualty report" OR "missile strike") -sports -entertainment -baseball'
+        news_url = f'https://newsapi.org/v2/everything?q={q}&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}&pageSize=5'
         n_res = requests.get(news_url).json()
         headlines = n_res.get('articles', [])
-        press_factor = 1 + (min(n_res.get('totalResults', 0), 2000) / 10000)
+        press_factor = 1 + (min(n_res.get('totalResults', 0), 1500) / 8000)
     except: press_factor = 1.0
 
-    # --- 新・モルグ指数計算式 ---
-    # $MORG = Base \times (1 + \frac{ConflictVol}{100}) \times (\frac{Oil}{75}) \times (1 + \frac{Iron}{20}) \times Press$
+    # 指数計算
     price_usd = 1.0 * (1 + (conflict_vol/100)) * (oil_price/75) * (1 + (iron_idx/20)) * press_factor
     
     return {
@@ -76,67 +75,60 @@ def fetch_morgue_metrics():
         "time": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
     }
 
-# データ処理
 current = fetch_morgue_metrics()
 prev = st.session_state.prev_data or current
 
-def get_delta(key):
-    diff = current[key] - prev[key]
-    if isinstance(diff, int): return f"{diff}"
-    return f"{diff:.3f}"
-
-# --- UI構築 ---
+# --- UI ---
 st.markdown(f"""
-    <div class="header-container">
-        <span class="system-title">MORGUE INDEX SYSTEM // v1.7</span>
-        <span class="status-tag">● 同期完了 (JST): {current['time']}</span>
+    <div style="display:flex; justify-content:space-between; border-bottom:2px solid #333; padding-bottom:10px;">
+        <span style="font-family:'JetBrains Mono'; font-weight:bold; letter-spacing:2px;">MORGUE INDEX // SYSTEM v1.8</span>
+        <span style="color:#00FF00; font-family:'JetBrains Mono';">● SYNC: {current['time']} JST</span>
     </div>
 """, unsafe_allow_html=True)
 
 st.write("##")
 
-# メインメトリクス
+# メイン表示
 c1, c2 = st.columns(2)
-c1.metric("MORG/JPY", f"¥{current['morg_jpy']}", delta=f"{get_delta('morg_jpy')} JPY")
-c2.metric("MORG/USD", f"$ {current['morg_usd']}", delta=f"{get_delta('morg_usd')} USD")
+c1.metric("MORG/JPY", f"¥{current['morg_jpy']}", delta=f"{current['morg_jpy'] - prev['morg_jpy']}円")
+c2.metric("MORG/USD", f"$ {current['morg_usd']}", delta=f"{current['morg_usd'] - prev['morg_usd']:.3f}$")
 
 st.write("##")
 
-# サブメトリクス（アップダウン表示）
+# サブメトリクス
 c3, c4, c5, c6 = st.columns(4)
-c3.metric("混乱指数 (CONFLICT)", f"{current['conflict_vol']}", delta=get_delta('conflict_vol'))
-c4.metric("軍需指数 (IRON)", f"{current['iron']}%", delta=get_delta('iron'))
-c5.metric("原油価格 (OIL)", f"${current['oil']}", delta=get_delta('oil'))
-c6.metric("報道圧力 (PRESS)", f"x{current['press']}", delta=get_delta('press'))
+c3.metric("混乱度 (CONFLICT)", current['conflict_vol'])
+c4.metric("軍需騰落 (IRON)", f"{current['iron']}%")
+c5.metric("原油価格 (OIL)", f"${current['oil']}")
+c6.metric("報道圧力 (PRESS)", f"x{current['press']}")
 
 st.divider()
 
-# --- グラフィックセクション ---
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.markdown("#### 指数推移トレンド")
-    # 簡易的な折れ線グラフ（前回の値を反映）
+    st.markdown("### ［ 指数推移 ］")
     fig = go.Figure()
-    # 描画用の擬似履歴（実際はDB保存が必要ですが、セッションで代用）
-    periods = 20
-    hist_y = [current['morg_usd'] * (1 + np.random.uniform(-0.005, 0.005)) for _ in range(periods)]
-    fig.add_trace(go.Scatter(y=hist_y, mode='lines+markers', line=dict(color='#FFFFFF', width=2), fill='tozeroy'))
-    fig.update_layout(template="plotly_dark", height=300, margin=dict(l=10,r=10,b=10,t=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    # セッションを使って簡易的な履歴をシミュレート（実際は20回分のリストを保持するのが理想）
+    y_vals = [current['morg_usd'] * (1 + np.random.uniform(-0.003, 0.003)) for _ in range(15)] + [current['morg_usd']]
+    fig.add_trace(go.Scatter(y=y_vals, mode='lines+markers', line=dict(color='#FFFFFF', width=3), fill='tozeroy', fillcolor='rgba(255,255,255,0.05)'))
+    fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,b=0,t=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True)
 
+    # 生データの常時表示（プルダウン廃止）
+    st.write("##")
+    st.markdown("### ［ 計算根拠データ ］")
+    raw_df = pd.DataFrame([current]).drop('headlines', axis=1)
+    st.dataframe(raw_df, use_container_width=True)
+
 with col_right:
-    st.markdown("#### 最新戦況ブリーフィング")
+    st.markdown("### ［ 最新戦況 ］")
     for art in current['headlines']:
         st.markdown(f"""
-            <div style="margin-bottom:12px; border-left:2px solid #FF0000; padding-left:10px;">
-                <small style="color:#666;">{art['publishedAt'][:10]}</small><br>
-                <a href="{art['url']}" target="_blank" style="color:#DDD; text-decoration:none; font-size:12px;">{art['title'][:70]}...</a>
+            <div style="margin-bottom:15px; border-left:3px solid #FF0000; padding-left:12px;">
+                <span class="news-source">{art['source']['name']}</span><br>
+                <a href="{art['url']}" target="_blank" class="news-title">{art['title']}</a>
             </div>
         """, unsafe_allow_html=True)
-
-# 計算根拠テーブル
-with st.expander("計算根拠生データ (Raw Data)"):
-    st.table(pd.DataFrame([current]).drop('headlines', axis=1))
 
 st.session_state.prev_data = current
