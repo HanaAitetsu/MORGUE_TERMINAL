@@ -12,7 +12,7 @@ JST = timezone(timedelta(hours=9))
 FRED_API_KEY = os.environ.get("FRED_API_KEY")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 
-st.set_page_config(page_title="MORGUE TERMINAL v2.4", layout="wide")
+st.set_page_config(page_title="MORGUE TERMINAL v2.5", layout="wide")
 
 def local_css(file_name):
     try:
@@ -24,27 +24,33 @@ local_css("style.css")
 if 'history' not in st.session_state:
     st.session_state.history = []
 
-# --- 過去データの初期生成 (ロウソク足対応版) ---
+# --- 過去データの初期生成 (データ構造を完全に統一) ---
 @st.cache_data(ttl=3600)
 def get_initial_history():
     h_data = []
     base_time = datetime.now(JST)
     current_price = 1.250
+    fixed_fx = 154.50 # 初期化用の仮レート
+    
     for i in range(25):
         t = (base_time - timedelta(minutes=15*(25-i))).strftime("%H:%M")
-        change = np.random.uniform(-0.02, 0.02)
+        change = np.random.uniform(-0.015, 0.015)
         open_p = current_price
         close_p = open_p + change
-        high_p = max(open_p, close_p) + np.random.uniform(0, 0.01)
-        low_p = min(open_p, close_p) - np.random.uniform(0, 0.01)
+        high_p = max(open_p, close_p) + 0.005
+        low_p = min(open_p, close_p) - 0.005
         
+        # 全てのキーをfetch_latestと合わせる
         h_data.append({
             "time": t,
             "open": round(open_p, 3), "high": round(high_p, 3),
             "low": round(low_p, 3), "close": round(close_p, 3),
+            "morg_jpy": int(close_p * fixed_fx),
+            "fx_rate": fixed_fx,
             "iron": round(np.random.uniform(-0.5, 0.5), 2),
             "conflict": round(140.0 + np.random.uniform(-5, 5), 1),
-            "oil": round(80.0 + np.random.uniform(-2, 2), 2)
+            "oil": round(80.0 + np.random.uniform(-2, 2), 2),
+            "factors": {"c": 1.4, "o": 1.0, "i": 1.0, "p": 1.0}
         })
         current_price = close_p
     return h_data
@@ -76,7 +82,7 @@ def fetch_latest():
         oil_price = float(requests.get(fred_url).json()['observations'][0]['value'])
     except: pass
 
-    # 軍需株 (10銘柄)
+    # 軍需株
     iron_growth = 0.1
     try:
         tickers = ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII", "PLTR", "KTOS", "LDOS"]
@@ -103,13 +109,14 @@ def fetch_latest():
     
     current_time = datetime.now(JST).strftime("%H:%M")
     
-    # ロウソク足用データ作成
+    # ロウソク足の連続性を担保
     prev_close = st.session_state.history[-1]['close'] if st.session_state.history else morg_usd
+    
     new_entry = {
         "time": current_time,
         "open": prev_close,
-        "high": max(prev_close, morg_usd) + 0.002,
-        "low": min(prev_close, morg_usd) - 0.002,
+        "high": max(prev_close, morg_usd) + 0.003,
+        "low": min(prev_close, morg_usd) - 0.003,
         "close": round(morg_usd, 3),
         "morg_jpy": int(morg_usd * fx_rate),
         "fx_rate": round(fx_rate, 2),
@@ -123,7 +130,7 @@ def fetch_latest():
     
     if not st.session_state.history or st.session_state.history[-1]['time'] != current_time:
         st.session_state.history.append(new_entry)
-        if len(st.session_state.history) > 40: st.session_state.history.pop(0)
+        if len(st.session_state.history) > 50: st.session_state.history.pop(0)
         
     return new_entry
 
@@ -133,7 +140,7 @@ df = pd.DataFrame(st.session_state.history)
 # --- UI ---
 st.markdown(f"""
     <div style="display:flex; justify-content:space-between; border-bottom:2px solid #444; padding-bottom:10px;">
-        <span style="font-family:'JetBrains Mono'; font-weight:bold; letter-spacing:2px; font-size:22px;">MORGUE TERMINAL v2.4</span>
+        <span style="font-family:'JetBrains Mono'; font-weight:bold; letter-spacing:2px; font-size:22px;">MORGUE TERMINAL v2.5</span>
         <span style="color:#00FF00; font-family:'JetBrains Mono'; font-size:18px;">● LIVE_SYNC: {current['time']} JST</span>
     </div>
 """, unsafe_allow_html=True)
@@ -142,13 +149,20 @@ st.write("##")
 
 # メインメトリクス
 m1, m2, m3 = st.columns([2, 2, 1])
-m1.metric("MORG/JPY", f"¥{current['morg_jpy']}", delta=f"{current['morg_jpy'] - st.session_state.history[-2]['morg_jpy'] if len(st.session_state.history)>1 else 0} JPY")
-m2.metric("MORG/USD", f"$ {current['close']}", delta=f"{current['close'] - st.session_state.history[-2]['close'] if len(st.session_state.history)>1 else 0:.3f} USD")
-m3.metric("USD/JPY", f"¥{current['fx_rate']}")
+
+# deltaの計算を安全に行う
+def get_delta(key):
+    if len(st.session_state.history) > 1:
+        return current[key] - st.session_state.history[-2][key]
+    return 0
+
+m1.metric("MORG/JPY", f"¥{current['morg_jpy']}", delta=f"{get_delta('morg_jpy')} JPY")
+m2.metric("MORG/USD", f"$ {current['close']}", delta=f"{get_delta('close'):.3f} USD")
+m3.metric("USD/JPY", f"¥{current['fx_rate']}", delta=f"{get_delta('fx_rate'):.2f}")
 
 st.write("---")
 
-# 計算根拠パネル (復活)
+# 計算根拠パネル
 col_calc, col_eq = st.columns([1, 1.2])
 with col_calc:
     st.markdown("### ［ 指数構成要素の現在値 ］")
@@ -173,16 +187,14 @@ col_left, col_right = st.columns([2, 1])
 
 with col_left:
     st.markdown("### ［ 市場ボラティリティ ］")
-    # ロウソク足
     fig = go.Figure(data=[go.Candlestick(
         x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
         increasing_line_color='#FFFFFF', decreasing_line_color='#FF0000',
         increasing_fillcolor='#111', decreasing_fillcolor='#FF0000'
     )])
     
-    # Y軸のスケーリング調整
-    y_min = df['low'].min() * 0.995
-    y_max = df['high'].max() * 1.005
+    # Y軸を動的にスケーリング
+    y_min, y_max = df['low'].min() * 0.998, df['high'].max() * 1.002
     fig.update_layout(
         template="plotly_dark", height=450, margin=dict(l=10,r=10,b=10,t=10),
         yaxis=dict(range=[y_min, y_max], gridcolor='#222', tickformat=".3f"),
@@ -201,12 +213,13 @@ with col_right:
         """, unsafe_allow_html=True)
 
 st.write("---")
-# 個別指標のミニトレンド
 st.markdown("### ［ 指数構成要素の推移 ］")
 t1, t2, t3 = st.columns(3)
+# インデックスを時間に設定して表示
+chart_df = df.set_index('time')
 t1.caption("CONFLICT VOL")
-t1.line_chart(df.set_index('time')['conflict'], height=120)
+t1.line_chart(chart_df['conflict'], height=120)
 t2.caption("IRON (DEFENSE INDEX)")
-t2.line_chart(df.set_index('time')['iron'], height=120)
+t2.line_chart(chart_df['iron'], height=120)
 t3.caption("OIL PRICE (BRENT)")
-t3.line_chart(df.set_index('time')['oil'], height=120)
+t3.line_chart(chart_df['oil'], height=120)
