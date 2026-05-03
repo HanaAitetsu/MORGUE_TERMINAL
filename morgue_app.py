@@ -7,198 +7,206 @@ import numpy as np
 import os
 from datetime import datetime, timedelta, timezone
 
-# --- システム設定 ---
+# --- 設定 ---
 JST = timezone(timedelta(hours=9))
 FRED_API_KEY = os.environ.get("FRED_API_KEY")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 
-st.set_page_config(page_title="MORGUE TERMINAL v2.3", layout="wide")
+st.set_page_config(page_title="MORGUE TERMINAL v2.4", layout="wide")
 
-# CSS適用
 def local_css(file_name):
     try:
         with open(file_name, encoding="utf-8") as f:
             st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-    except:
-        st.markdown("""<style>
-            body { background-color: #000; color: #fff; }
-            .stMetric { border: 1px solid #333; padding: 10px; }
-        </style>""", unsafe_allow_html=True)
-
+    except: pass
 local_css("style.css")
 
-# --- セッション履歴の管理 ---
 if 'history' not in st.session_state:
     st.session_state.history = []
 
-# --- 過去データの初期シミュレーション ---
+# --- 過去データの初期生成 (ロウソク足対応版) ---
 @st.cache_data(ttl=3600)
 def get_initial_history():
     h_data = []
     base_time = datetime.now(JST)
-    for i in range(20):
-        t = (base_time - timedelta(minutes=15*(20-i))).strftime("%H:%M")
+    current_price = 1.250
+    for i in range(25):
+        t = (base_time - timedelta(minutes=15*(25-i))).strftime("%H:%M")
+        change = np.random.uniform(-0.02, 0.02)
+        open_p = current_price
+        close_p = open_p + change
+        high_p = max(open_p, close_p) + np.random.uniform(0, 0.01)
+        low_p = min(open_p, close_p) - np.random.uniform(0, 0.01)
+        
         h_data.append({
             "time": t,
-            "iron": round(np.random.uniform(-0.5, 0.5), 3),
-            "conflict": round(140.0 + np.random.uniform(-5, 5), 2),
-            "oil": round(80.0 + np.random.uniform(-2, 2), 2),
-            "morg_usd": round(1.2 + (i * 0.005), 3)
+            "open": round(open_p, 3), "high": round(high_p, 3),
+            "low": round(low_p, 3), "close": round(close_p, 3),
+            "iron": round(np.random.uniform(-0.5, 0.5), 2),
+            "conflict": round(140.0 + np.random.uniform(-5, 5), 1),
+            "oil": round(80.0 + np.random.uniform(-2, 2), 2)
         })
+        current_price = close_p
     return h_data
 
 if not st.session_state.history:
     st.session_state.history = get_initial_history()
 
-# --- データ取得エンジン ---
+# --- 最新データ取得 ---
 @st.cache_data(ttl=600)
-def fetch_latest_data():
-    # 1. 為替レート
+def fetch_latest():
+    # 為替
     fx_rate = 155.0
     try:
         fx_df = yf.download("JPY=X", period="1d", interval="5m", progress=False)
-        if not fx_df.empty:
-            # 最新のClose値を確実にスカラー数値として取得
-            fx_rate = float(fx_df['Close'].iloc[-1].item())
+        fx_rate = float(fx_df['Close'].iloc[-1].item())
     except: pass
 
-    # 2. GDELT (混乱度)
+    # 混乱度
     conflict_vol = 145.0
     try:
-        gdelt_url = 'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR violence OR "military action")&mode=TimelineVol&format=json'
-        res = requests.get(gdelt_url, timeout=10).json()
+        res = requests.get('https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR violence OR "military action")&mode=TimelineVol&format=json', timeout=10).json()
         conflict_vol = float(res['timeline'][0]['data'][-1]['value'] * 10)
     except: pass
 
-    # 3. FRED (原油)
+    # 原油
     oil_price = 82.0
     try:
         fred_url = f"https://api.stlouisfed.org/fred/series/observations?series_id=DCOILBRENTEU&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=1"
         oil_price = float(requests.get(fred_url).json()['observations'][0]['value'])
     except: pass
 
-    # 4. yfinance (軍需株10銘柄)
+    # 軍需株 (10銘柄)
     iron_growth = 0.1
     try:
-        defense_tickers = ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII", "PLTR", "KTOS", "LDOS"]
-        stocks = yf.download(defense_tickers, period="1d", interval="5m", progress=False)['Close']
-        # 全銘柄の平均騰落率を算出
-        avg_pct = stocks.pct_change().mean(axis=1).iloc[-1]
-        iron_growth = float(avg_pct * 100)
+        tickers = ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII", "PLTR", "KTOS", "LDOS"]
+        stocks = yf.download(tickers, period="1d", interval="5m", progress=False)['Close']
+        iron_growth = float(stocks.pct_change().mean(axis=1).iloc[-1] * 100)
     except: pass
 
-    # 5. News API
+    # 報道
     press_count = 500
     headlines = []
     try:
-        q = '("armed conflict" OR "warfare" OR "missile strike") -sports -entertainment'
-        news_url = f'https://newsapi.org/v2/everything?q={q}&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}&pageSize=5'
+        news_url = f'https://newsapi.org/v2/everything?q=("armed conflict" OR warfare)&sortBy=publishedAt&apiKey={NEWS_API_KEY}&pageSize=5'
         n_res = requests.get(news_url).json()
         headlines = n_res.get('articles', [])
         press_count = int(n_res.get('totalResults', 500))
     except: pass
 
     # 指数計算
-    p_factor = 1 + (min(press_count, 2000) / 8000)
-    morg_usd = 1.0 * (1 + (conflict_vol/100)) * (oil_price/75) * (1 + (iron_growth/20)) * p_factor
+    c_f = 1 + (conflict_vol/100)
+    o_f = oil_price / 75
+    i_f = 1 + (iron_growth/20)
+    p_f = 1 + (min(press_count, 2000) / 8000)
+    morg_usd = 1.0 * c_f * o_f * i_f * p_f
     
-    current = {
-        "time": datetime.now(JST).strftime("%H:%M"),
-        "morg_usd": round(float(morg_usd), 3),
+    current_time = datetime.now(JST).strftime("%H:%M")
+    
+    # ロウソク足用データ作成
+    prev_close = st.session_state.history[-1]['close'] if st.session_state.history else morg_usd
+    new_entry = {
+        "time": current_time,
+        "open": prev_close,
+        "high": max(prev_close, morg_usd) + 0.002,
+        "low": min(prev_close, morg_usd) - 0.002,
+        "close": round(morg_usd, 3),
         "morg_jpy": int(morg_usd * fx_rate),
         "fx_rate": round(fx_rate, 2),
         "conflict": round(conflict_vol, 2),
         "iron": round(iron_growth, 3),
         "oil": round(oil_price, 2),
         "press": press_count,
-        "p_factor": round(p_factor, 3),
+        "factors": {"c": round(c_f, 3), "o": round(o_f, 3), "i": round(i_f, 3), "p": round(p_f, 3)},
         "headlines": headlines
     }
     
-    # 履歴を更新
-    if not st.session_state.history or st.session_state.history[-1]['time'] != current['time']:
-        st.session_state.history.append(current)
+    if not st.session_state.history or st.session_state.history[-1]['time'] != current_time:
+        st.session_state.history.append(new_entry)
         if len(st.session_state.history) > 40: st.session_state.history.pop(0)
         
-    return current
+    return new_entry
 
-# --- 実行 ---
-current = fetch_latest_data()
-history_df = pd.DataFrame(st.session_state.history)
+current = fetch_latest()
+df = pd.DataFrame(st.session_state.history)
 
-# --- UI構築 ---
+# --- UI ---
 st.markdown(f"""
     <div style="display:flex; justify-content:space-between; border-bottom:2px solid #444; padding-bottom:10px;">
-        <span style="font-family:'JetBrains Mono'; font-weight:bold; letter-spacing:2px; font-size:20px;">MORGUE TERMINAL v2.3</span>
-        <span style="color:#00FF00; font-family:'JetBrains Mono';">● SYNC: {current['time']} JST</span>
+        <span style="font-family:'JetBrains Mono'; font-weight:bold; letter-spacing:2px; font-size:22px;">MORGUE TERMINAL v2.4</span>
+        <span style="color:#00FF00; font-family:'JetBrains Mono'; font-size:18px;">● LIVE_SYNC: {current['time']} JST</span>
     </div>
 """, unsafe_allow_html=True)
 
 st.write("##")
 
-# メイン数値
-c1, c2, c3 = st.columns([2, 2, 1])
-c1.metric("MORG/JPY", f"¥{current['morg_jpy']}")
-c2.metric("MORG/USD", f"$ {current['morg_usd']}")
-c3.metric("USD/JPY", f"{current['fx_rate']}")
+# メインメトリクス
+m1, m2, m3 = st.columns([2, 2, 1])
+m1.metric("MORG/JPY", f"¥{current['morg_jpy']}", delta=f"{current['morg_jpy'] - st.session_state.history[-2]['morg_jpy'] if len(st.session_state.history)>1 else 0} JPY")
+m2.metric("MORG/USD", f"$ {current['close']}", delta=f"{current['close'] - st.session_state.history[-2]['close'] if len(st.session_state.history)>1 else 0:.3f} USD")
+m3.metric("USD/JPY", f"¥{current['fx_rate']}")
 
-st.divider()
+st.write("---")
 
-# トレンドグラフ
-st.markdown("### ［ 指数構成要素の推移 ］")
-if not history_df.empty:
-    chart_data = history_df.set_index('time')
-    t1, t2, t3 = st.columns(3)
-    with t1:
-        st.caption("CONFLICT (混乱度)")
-        st.line_chart(chart_data['conflict'], height=180)
-    with t2:
-        st.caption("IRON (軍需平均騰落 %)")
-        st.line_chart(chart_data['iron'], height=180)
-    with t3:
-        st.caption("OIL (原油価格 $)")
-        st.line_chart(chart_data['oil'], height=180)
-
-st.divider()
-
-# 計算根拠のエクスパンダー
-with st.expander("アルゴリズム詳細を確認"):
-    st.latex(r"MORG_{USD} = 1.0 \times (1 + \frac{Conflict}{100}) \times \frac{Oil}{75} \times (1 + \frac{Iron}{20}) \times PressFactor")
+# 計算根拠パネル (復活)
+col_calc, col_eq = st.columns([1, 1.2])
+with col_calc:
+    st.markdown("### ［ 指数構成要素の現在値 ］")
     st.markdown(f"""
-    | 要素 | 現在値 | 適用係数 |
+    | 要素 | 取得値 | 適用係数 |
     | :--- | :--- | :--- |
-    | **混乱 (Conflict)** | {current['conflict']} | **x{1 + current['conflict']/100:.3f}** |
-    | **原油 (Oil)** | ${current['oil']} | **x{current['oil']/75:.3f}** |
-    | **軍需 (Iron)** | {current['iron']}% | **x{1 + current['iron']/20:.3f}** |
-    | **報道 (Press)** | {current['press']}件 | **x{current['p_factor']}** |
+    | **混乱度 (Conflict)** | {current['conflict']} | **x {current['factors']['c']}** |
+    | **原油価格 (Oil)** | ${current['oil']} | **x {current['factors']['o']}** |
+    | **軍需騰落 (Iron)** | {current['iron']}% | **x {current['factors']['i']}** |
+    | **報道圧力 (Press)** | {current['press']} | **x {current['factors']['p']}** |
     """)
 
-st.write("##")
+with col_eq:
+    st.markdown("### ［ 算出アルゴリズム ］")
+    st.latex(r"MORG_{USD} = 1.0 \times \left(1 + \frac{C}{100}\right) \times \frac{O}{75} \times \left(1 + \frac{I}{20}\right) \times P_{factor}")
+    st.info(f"最終計算結果: $1.0 × {current['factors']['c']} × {current['factors']['o']} × {current['factors']['i']} × {current['factors']['p']} = **$ {current['close']}**")
 
-# 下部レイアウト
+st.write("---")
+
+# グラフセクション
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
     st.markdown("### ［ 市場ボラティリティ ］")
-    h_usd = history_df['morg_usd'].tolist()
+    # ロウソク足
     fig = go.Figure(data=[go.Candlestick(
-        x=history_df['time'],
-        open=h_usd[:-1], high=[v*1.001 for v in h_usd[:-1]],
-        low=[v*0.999 for v in h_usd[:-1]], close=h_usd[1:],
+        x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
         increasing_line_color='#FFFFFF', decreasing_line_color='#FF0000',
         increasing_fillcolor='#111', decreasing_fillcolor='#FF0000'
     )])
-    fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,b=0,t=0),
-                      yaxis=dict(autorange=True, fixedrange=False, tickformat=".3f"),
-                      xaxis_rangeslider_visible=False)
+    
+    # Y軸のスケーリング調整
+    y_min = df['low'].min() * 0.995
+    y_max = df['high'].max() * 1.005
+    fig.update_layout(
+        template="plotly_dark", height=450, margin=dict(l=10,r=10,b=10,t=10),
+        yaxis=dict(range=[y_min, y_max], gridcolor='#222', tickformat=".3f"),
+        xaxis=dict(gridcolor='#222'), xaxis_rangeslider_visible=False
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 with col_right:
     st.markdown("### ［ 最新戦況 ］")
     for art in current['headlines']:
         st.markdown(f"""
-            <div style="margin-bottom:12px; border-left:3px solid #FF0000; padding-left:12px;">
+            <div style="margin-bottom:15px; border-left:3px solid #FF0000; padding-left:12px;">
                 <span style="color:#FF4B4B; font-size:11px; font-weight:bold;">{art['source']['name']}</span><br>
                 <a href="{art['url']}" target="_blank" style="color:#EEE; text-decoration:none; font-size:13px; font-weight:bold;">{art['title']}</a>
             </div>
         """, unsafe_allow_html=True)
+
+st.write("---")
+# 個別指標のミニトレンド
+st.markdown("### ［ 指数構成要素の推移 ］")
+t1, t2, t3 = st.columns(3)
+t1.caption("CONFLICT VOL")
+t1.line_chart(df.set_index('time')['conflict'], height=120)
+t2.caption("IRON (DEFENSE INDEX)")
+t2.line_chart(df.set_index('time')['iron'], height=120)
+t3.caption("OIL PRICE (BRENT)")
+t3.line_chart(df.set_index('time')['oil'], height=120)
