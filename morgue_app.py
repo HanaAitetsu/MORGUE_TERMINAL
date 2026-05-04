@@ -2,18 +2,16 @@
 MORGUE TERMINAL MRG-v2.8
 架空の戦災暗号資産「モルグ」のリアルタイム価格ダッシュボード
 
-改善点:
-- キャッシュとセッション状態の分離・整合化
-- エラーハンドリングの明示化（ロギング付き）
-- yfinance v0.2+ 対応のダウンロード方法
-- OHLC値をローリング統計で現実的に生成
-- 時刻比較をdatetimeオブジェクトで行い日またぎ対応
-- 定数を CONFIG 辞書に集約
-- st.rerun() による自動更新ループ対応
-- サイドバーに設定パネルを追加
+v3改善点:
+- 文字色を灰色から読みやすい白・黄・緑系に強化
+- 係数の導出式（生値 → 式 → 係数値）を詳細表示
+- 累積乗算の全ステップを可視化
+- ローソク足チャートが「架空通貨シミュレーション」であることを明示
+- 個別推移グラフに係数値も追加
 """
 
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -36,42 +34,28 @@ log = logging.getLogger(__name__)
 JST = timezone(timedelta(hours=9))
 
 CONFIG = {
-    # フォールバック値（API取得失敗時）
     "DEFAULT_CONFLICT": 145.0,
     "DEFAULT_OIL":       82.0,
     "DEFAULT_FX":       155.0,
     "DEFAULT_PRESS":      1.06,
-
-    # MRG計算パラメータ
-    "BASE_UNIT":        1.0,
-    "CONFLICT_SCALE":   100.0,   # c_factor = 1 + conflict / scale
-    "OIL_ANCHOR":        75.0,   # o_factor = oil / anchor
-    "IRON_SCALE":        20.0,   # i_factor = 1 + iron / scale
-
-    # データ取得
+    "BASE_UNIT":          1.0,
+    "CONFLICT_SCALE":   100.0,
+    "OIL_ANCHOR":        75.0,
+    "IRON_SCALE":        20.0,
     "HISTORY_POINTS":    40,
     "MAX_HISTORY":      100,
     "YF_PERIOD":        "2d",
     "YF_INTERVAL":      "15m",
-
-    # 防衛関連ティッカー
     "DEFENSE_TICKERS": ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII", "PLTR", "KTOS", "LDOS"],
     "FX_TICKER":       "JPY=X",
-
-    # GDELT API
     "GDELT_URL": (
         "https://api.gdeltproject.org/api/v2/doc/doc"
         "?query=(conflict+OR+violence)&mode=TimelineVol&format=json"
     ),
-
-    # FRED API
     "FRED_SERIES": "DCOILBRENTEU",
-
-    # 自動更新間隔（秒）
     "AUTO_REFRESH_SEC": 60,
 }
 
-import os
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
 
@@ -82,15 +66,22 @@ st.set_page_config(page_title="MORGUE TERMINAL MRG-v2.8", layout="wide")
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
 
+    /* ベース */
     html, body, [data-testid="stAppViewContainer"] {
         background-color: #040404;
-        color: #c8c8c8;
+        color: #e8e8e8;
         font-family: 'Rajdhani', sans-serif;
+        font-size: 15px;
     }
+    p, li, span { color: #e8e8e8; }
     code, pre, .stCode { font-family: 'Share Tech Mono', monospace !important; }
 
+    /* stCode ブロック内テキストを明るく */
+    .stCode code { color: #f0e68c !important; background: #0a0a0a !important; }
+
+    /* メトリクスカード */
     [data-testid="stMetric"] {
         background: linear-gradient(135deg, #0d0d0d 0%, #111 100%);
         border: 1px solid #2a2a2a;
@@ -98,23 +89,73 @@ st.markdown("""
         padding: 14px 18px !important;
         border-radius: 2px;
     }
-    [data-testid="stMetricValue"]  { color: #fff !important; font-size: 2rem !important; }
+    [data-testid="stMetricValue"]  { color: #ffffff !important; font-size: 2rem !important; font-weight: 700; }
     [data-testid="stMetricDelta"]  { font-size: 0.85rem !important; }
-    [data-testid="stMetricLabel"]  { color: #666 !important; font-size: 0.7rem !important; letter-spacing: 2px; }
+    [data-testid="stMetricLabel"]  { color: #aaaaaa !important; font-size: 0.72rem !important; letter-spacing: 2px; }
 
-    .stMarkdown h4 { color: #888; font-size: 0.72rem; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 4px; }
+    /* セクション見出し */
+    .stMarkdown h4 {
+        color: #cccccc !important;
+        font-size: 0.72rem;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+    }
 
-    /* スクロールバーを非表示 */
+    /* caption */
+    [data-testid="stCaptionContainer"] p { color: #bbbbbb !important; font-size: 0.72rem; letter-spacing: 2px; }
+
+    /* テーブル */
+    table { width: 100%; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 0.8rem; }
+    th { color: #aaaaaa !important; font-weight: 400; border-bottom: 1px solid #2a2a2a; padding: 5px 10px; }
+    td { padding: 6px 10px; border-bottom: 1px solid #1a1a1a; color: #e8e8e8; }
+    td:nth-child(2) { color: #7dd3fc; } /* 実測値: 水色 */
+    td:nth-child(3) { color: #fde68a; text-align: right; } /* 係数: 黄色 */
+    strong { color: #ffffff; }
+
+    /* 計算過程パネル */
+    .calc-panel {
+        background: #080808;
+        border: 1px solid #222;
+        border-radius: 3px;
+        padding: 14px 16px;
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 0.8rem;
+        line-height: 2;
+    }
+    .calc-raw   { color: #7dd3fc; }  /* 生の実測値: 水色 */
+    .calc-eq    { color: #888888; }  /* 式の説明: 灰 */
+    .calc-coef  { color: #fde68a; }  /* 係数値: 黄 */
+    .calc-step  { color: #86efac; }  /* 中間結果: 緑 */
+    .calc-final { color: #ff6b6b; font-weight: bold; } /* 最終結果: 赤 */
+    .calc-jpy   { color: #f9a8d4; font-weight: bold; } /* JPY: ピンク */
+    .calc-label { color: #aaaaaa; } /* ラベル: 明るい灰 */
+    .calc-divider { color: #333; }
+
+    /* スクロールバー非表示 */
     ::-webkit-scrollbar { display: none; }
 
     /* サイドバー */
-    [data-testid="stSidebar"] { background-color: #080808; border-right: 1px solid #1a1a1a; }
+    [data-testid="stSidebar"] { background-color: #060606; border-right: 1px solid #1a1a1a; }
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label { color: #cccccc !important; }
+    [data-testid="stSidebar"] h3 { color: #ffffff !important; }
 
-    /* テーブル */
-    table { width: 100%; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 0.78rem; }
-    th { color: #555; font-weight: 400; border-bottom: 1px solid #222; padding: 4px 8px; }
-    td { padding: 5px 8px; border-bottom: 1px solid #161616; }
-    td:last-child { color: #ff5050; text-align: right; }
+    /* チャートキャプション注記 */
+    .sim-badge {
+        display: inline-block;
+        background: #1a1000;
+        border: 1px solid #554400;
+        color: #fde68a;
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 0.68rem;
+        padding: 2px 8px;
+        border-radius: 2px;
+        letter-spacing: 1px;
+        margin-left: 8px;
+        vertical-align: middle;
+    }
 
     @media (max-width: 768px) {
         [data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; }
@@ -123,32 +164,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# 3. データ取得関数（各APIを独立してフォールバック）
+# 3. データ取得関数
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=300)
 def fetch_conflict_index() -> float:
-    """GDELT から紛争ボリューム指数を取得。失敗時はデフォルト値。"""
     try:
         res = requests.get(CONFIG["GDELT_URL"], timeout=10)
         res.raise_for_status()
-        data = res.json()
-        raw = float(data["timeline"][0]["data"][-1]["value"])
+        raw = float(res.json()["timeline"][0]["data"][-1]["value"])
         val = raw * 10
-        log.info("GDELT conflict index fetched: %.2f", val)
+        log.info("GDELT conflict index: %.2f", val)
         return val
     except requests.exceptions.RequestException as e:
-        log.warning("GDELT fetch failed (%s), using default.", e)
+        log.warning("GDELT fetch failed (%s)", e)
     except (KeyError, IndexError, ValueError) as e:
-        log.warning("GDELT parse error (%s), using default.", e)
+        log.warning("GDELT parse error (%s)", e)
     return CONFIG["DEFAULT_CONFLICT"]
 
 
 @st.cache_data(ttl=600)
 def fetch_oil_price() -> float:
-    """FRED から Brent 原油価格を取得。失敗時はデフォルト値。"""
     if not FRED_API_KEY:
-        log.warning("FRED_API_KEY not set, using default oil price.")
+        log.warning("FRED_API_KEY not set, using default.")
         return CONFIG["DEFAULT_OIL"]
     try:
         url = (
@@ -159,24 +197,19 @@ def fetch_oil_price() -> float:
         res = requests.get(url, timeout=10)
         res.raise_for_status()
         val = float(res.json()["observations"][0]["value"])
-        log.info("Oil price fetched: %.2f", val)
+        log.info("Oil price: %.2f", val)
         return val
     except requests.exceptions.RequestException as e:
-        log.warning("FRED fetch failed (%s), using default.", e)
+        log.warning("FRED fetch failed (%s)", e)
     except (KeyError, IndexError, ValueError) as e:
-        log.warning("FRED parse error (%s), using default.", e)
+        log.warning("FRED parse error (%s)", e)
     return CONFIG["DEFAULT_OIL"]
 
 
 @st.cache_data(ttl=300)
 def fetch_market_data() -> tuple[pd.Series, pd.Series]:
-    """
-    防衛株の平均騰落率と USD/JPY を取得。
-    戻り値: (defense_pct_change_series, fx_series)
-    """
     tickers = CONFIG["DEFENSE_TICKERS"] + [CONFIG["FX_TICKER"]]
     try:
-        # yfinance v0.2+ では multi_level_index=False を使うと扱いやすい
         raw = yf.download(
             tickers,
             period=CONFIG["YF_PERIOD"],
@@ -184,104 +217,108 @@ def fetch_market_data() -> tuple[pd.Series, pd.Series]:
             progress=False,
             auto_adjust=True,
         )
-
-        # Close カラム群を取り出す（MultiIndex 対応）
-        if isinstance(raw.columns, pd.MultiIndex):
-            close = raw["Close"].ffill()
-        else:
-            close = raw.ffill()
-
-        fx_series = close[CONFIG["FX_TICKER"]]
-        defense_close = close[CONFIG["DEFENSE_TICKERS"]]
-
-        # 防衛株平均騰落率（%）
-        growth_series = defense_close.pct_change().mean(axis=1) * 100
-        log.info("Market data fetched: %d rows", len(growth_series))
+        close = raw["Close"].ffill() if isinstance(raw.columns, pd.MultiIndex) else raw.ffill()
+        fx_series      = close[CONFIG["FX_TICKER"]]
+        defense_close  = close[CONFIG["DEFENSE_TICKERS"]]
+        growth_series  = defense_close.pct_change().mean(axis=1) * 100
+        log.info("Market data: %d rows", len(growth_series))
         return growth_series, fx_series
-
     except Exception as e:
         log.error("yfinance fetch failed: %s", e)
-        # フォールバック: 空の Series を返す
         return pd.Series(dtype=float), pd.Series(dtype=float)
 
 
 # ─────────────────────────────────────────────
-# 4. MRG 価格計算
+# 4. 計算ロジック
 # ─────────────────────────────────────────────
 
-def calculate_mrg(conflict: float, oil: float, iron_pct: float, press: float) -> float:
+def calculate_mrg_with_steps(conflict: float, oil: float, iron_pct: float, press: float) -> dict:
     """
-    MRG/USD を計算する。
-      conflict : GDELT 紛争指数
-      oil      : Brent 原油価格 (USD)
-      iron_pct : 防衛株平均騰落率 (%)
-      press    : 報道係数
+    MRG/USD を計算し、各ステップの中間値と導出式も返す。
     """
-    c_f = 1.0 + conflict / CONFIG["CONFLICT_SCALE"]
-    o_f = oil / CONFIG["OIL_ANCHOR"]
-    i_f = 1.0 + iron_pct / CONFIG["IRON_SCALE"]
-    return CONFIG["BASE_UNIT"] * c_f * o_f * i_f * press
+    c_f  = 1.0 + conflict / CONFIG["CONFLICT_SCALE"]
+    o_f  = oil            / CONFIG["OIL_ANCHOR"]
+    i_f  = 1.0 + iron_pct / CONFIG["IRON_SCALE"]
+    p_f  = press
+
+    s0 = CONFIG["BASE_UNIT"]
+    s1 = s0 * c_f
+    s2 = s1 * o_f
+    s3 = s2 * i_f
+    s4 = s3 * p_f
+
+    return {
+        "mrg_usd": s4,
+        "factors": {
+            "c": round(c_f, 4),
+            "o": round(o_f, 4),
+            "i": round(i_f, 4),
+            "p": round(p_f, 4),
+        },
+        "steps": {
+            "s0": round(s0, 4),
+            "s1": round(s1, 4),
+            "s2": round(s2, 4),
+            "s3": round(s3, 4),
+            "s4": round(s4, 4),
+        },
+        "derivations": {
+            # 式文字列（表示用）
+            "c": f"1 + {conflict:.2f} ÷ {CONFIG['CONFLICT_SCALE']:.0f}",
+            "o": f"{oil:.2f} ÷ {CONFIG['OIL_ANCHOR']:.0f}",
+            "i": f"1 + ({iron_pct:.4f}) ÷ {CONFIG['IRON_SCALE']:.0f}",
+            "p": "報道係数（固定）",
+        },
+    }
 
 
 def build_ohlc(mrg_usd: float, prev_close: float | None) -> dict:
-    """
-    前足の終値と現在値からローソク足 OHLC を構築する。
-    固定比率ではなくランダムウォーク的な揺らぎを加える。
-    """
-    rng = np.random.default_rng()
-    noise = rng.uniform(0.997, 1.003)
-    o = prev_close if prev_close is not None else mrg_usd * noise
-    c = mrg_usd
-    h = max(o, c) * rng.uniform(1.0005, 1.002)
-    l = min(o, c) * rng.uniform(0.998, 0.9995)
+    """前足終値ベースのローソク足 OHLC を生成（架空通貨シミュレーション）。"""
+    rng   = np.random.default_rng()
+    o     = prev_close if prev_close is not None else mrg_usd * rng.uniform(0.997, 1.003)
+    c     = mrg_usd
+    h     = max(o, c) * rng.uniform(1.0005, 1.002)
+    l     = min(o, c) * rng.uniform(0.998, 0.9995)
     return {"open": round(o, 4), "high": round(h, 4), "low": round(l, 4), "close": round(c, 4)}
 
 
 # ─────────────────────────────────────────────
-# 5. 同期データ構築
+# 5. 履歴構築
 # ─────────────────────────────────────────────
 
 def build_history() -> list[dict]:
-    """外部データを取得して過去 N ポイントの履歴リストを生成する。"""
     c_val = fetch_conflict_index()
     o_val = fetch_oil_price()
     p_f   = CONFIG["DEFAULT_PRESS"]
 
     growth_series, fx_series = fetch_market_data()
-
     if growth_series.empty:
-        log.warning("Market data empty, cannot build history.")
+        log.warning("Market data empty.")
         return []
 
-    points = growth_series.dropna().tail(CONFIG["HISTORY_POINTS"])
+    points    = growth_series.dropna().tail(CONFIG["HISTORY_POINTS"])
     h_list: list[dict] = []
     prev_close = None
 
     for ts, i_val in points.items():
-        mrg_usd = calculate_mrg(c_val, o_val, float(i_val), p_f)
-        fx = float(fx_series.loc[ts]) if ts in fx_series.index else CONFIG["DEFAULT_FX"]
-
-        ohlc = build_ohlc(mrg_usd, prev_close)
+        calc   = calculate_mrg_with_steps(c_val, o_val, float(i_val), p_f)
+        fx     = float(fx_series.loc[ts]) if ts in fx_series.index else CONFIG["DEFAULT_FX"]
+        ohlc   = build_ohlc(calc["mrg_usd"], prev_close)
         prev_close = ohlc["close"]
-
-        # datetimeオブジェクトも保持（比較用）
         ts_jst = ts.astimezone(JST)
 
         h_list.append({
-            "ts":       ts_jst,                           # datetime（重複チェック用）
-            "time":     ts_jst.strftime("%m/%d %H:%M"),   # 表示用（日付を含める）
+            "ts":       ts_jst,
+            "time":     ts_jst.strftime("%m/%d %H:%M"),
             **ohlc,
             "morg_jpy": int(ohlc["close"] * fx),
             "fx_rate":  round(fx, 2),
-            "iron":     round(float(i_val), 3),
+            "iron":     round(float(i_val), 4),
             "conflict": round(c_val, 2),
             "oil":      round(o_val, 2),
-            "factors": {
-                "c": round(1 + c_val / CONFIG["CONFLICT_SCALE"], 3),
-                "o": round(o_val   / CONFIG["OIL_ANCHOR"],        3),
-                "i": round(1 + float(i_val) / CONFIG["IRON_SCALE"], 3),
-                "p": p_f,
-            },
+            "factors":     calc["factors"],
+            "steps":       calc["steps"],
+            "derivations": calc["derivations"],
         })
 
     return h_list
@@ -292,65 +329,70 @@ def build_history() -> list[dict]:
 # ─────────────────────────────────────────────
 
 if "history" not in st.session_state or not st.session_state.history:
-    st.session_state.history = build_history()
+    st.session_state.history     = build_history()
     st.session_state.last_refresh = datetime.now(JST)
 
-# 最新足を追記（datetime で重複チェック）
 fresh = build_history()
 if fresh:
-    latest = fresh[-1]
+    latest     = fresh[-1]
     existing_ts = [e["ts"] for e in st.session_state.history]
     if latest["ts"] not in existing_ts:
         st.session_state.history.append(latest)
         if len(st.session_state.history) > CONFIG["MAX_HISTORY"]:
             st.session_state.history.pop(0)
-        log.info("New tick appended: %s", latest["time"])
 
-# データが空の場合の早期終了
 if not st.session_state.history:
     st.error("データの取得に失敗しました。外部 API の接続を確認してください。")
     st.stop()
 
 current = st.session_state.history[-1]
-df = pd.DataFrame(st.session_state.history)
+df      = pd.DataFrame(st.session_state.history)
 
 # ─────────────────────────────────────────────
-# 7. サイドバー（設定・ステータス）
+# 7. サイドバー
 # ─────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("### ⚙ TERMINAL CONFIG")
     st.caption("MRG-v2.8 // CLASSIFIED")
-
     st.markdown("---")
+
     auto_refresh = st.toggle("自動更新 (60s)", value=False)
     if st.button("🔄 手動更新", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
     st.markdown("---")
-    st.markdown("**データソース状態**")
+    st.markdown("**データソース**")
     fred_ok = bool(FRED_API_KEY)
     news_ok = bool(NEWS_API_KEY)
-    st.markdown(f"{'🟢' if fred_ok else '🔴'} FRED API {'接続済' if fred_ok else '未設定（デフォルト値使用）'}")
+    st.markdown(f"{'🟢' if fred_ok else '🔴'} FRED API {'接続済' if fred_ok else '未設定（デフォルト値）'}")
     st.markdown(f"{'🟢' if news_ok else '🔴'} NEWS API {'接続済' if news_ok else '未設定'}")
-    st.markdown("🟢 GDELT（キーなし）")
-    st.markdown("🟢 Yahoo Finance（キーなし）")
+    st.markdown("🟢 GDELT（認証不要）")
+    st.markdown("🟢 Yahoo Finance（認証不要）")
 
     st.markdown("---")
-    st.markdown("**計算式**")
+    st.markdown("**MRG 価格式**")
     st.code(
         "MRG = 1.0\n"
-        "    × (1 + C/100)\n"
-        "    × (OIL/75)\n"
-        "    × (1 + DEF%/20)\n"
-        "    × PRESS",
+        "  × (1 + C ÷ 100)   // Conflict\n"
+        "  × (OIL ÷ 75)      // Energy\n"
+        "  × (1 + DEF ÷ 20)  // Defense\n"
+        "  × PRESS            // 報道係数",
         language="text",
     )
 
     st.markdown("---")
+    st.markdown("**⚠ ローソク足について**")
+    st.caption(
+        "MRG は架空通貨のため OHLC は実データの防衛株騰落率を基に"
+        "シミュレーション生成しています。"
+        "Close 値のみが実計算値です。"
+    )
+
     last = st.session_state.get("last_refresh")
     if last:
+        st.markdown("---")
         st.caption(f"最終更新: {last.strftime('%H:%M:%S')} JST")
 
 # ─────────────────────────────────────────────
@@ -362,10 +404,10 @@ st.markdown(f"""
             border-bottom: 2px solid #1e1e1e; padding-bottom: 12px; margin-bottom: 4px;">
     <div>
         <span style="font-family:'Share Tech Mono'; font-weight:bold; letter-spacing:3px;
-                     font-size:22px; color:#fff;">MORGUE TERMINAL</span>
-        <span style="font-family:'Share Tech Mono'; font-size:12px; color:#444; margin-left:12px;">MRG-v2.8</span>
+                     font-size:22px; color:#ffffff;">MORGUE TERMINAL</span>
+        <span style="font-family:'Share Tech Mono'; font-size:12px; color:#555555; margin-left:12px;">MRG-v2.8</span>
     </div>
-    <div style="font-family:'Share Tech Mono'; font-size:13px; color:#2aff2a;">
+    <div style="font-family:'Share Tech Mono'; font-size:13px; color:#22ff55;">
         ● LIVE&nbsp;&nbsp;{current['time']} JST
     </div>
 </div>
@@ -378,7 +420,7 @@ st.write("")
 # ─────────────────────────────────────────────
 
 if len(st.session_state.history) > 1:
-    prev = st.session_state.history[-2]
+    prev  = st.session_state.history[-2]
     d_jpy = current["morg_jpy"] - prev["morg_jpy"]
     d_usd = current["close"]    - prev["close"]
     d_fx  = current["fx_rate"]  - prev["fx_rate"]
@@ -394,38 +436,93 @@ m4.metric("CONFLICT", f"{current['conflict']:.1f}",      delta=None)
 st.write("---")
 
 # ─────────────────────────────────────────────
-# 10. 構成要素 & 算出プロセス
+# 10. 詳細な計算過程パネル
 # ─────────────────────────────────────────────
 
-cl, cr = st.columns([1, 1.3])
+st.markdown("#### ［ MRG 価格算出プロセス ］")
 
+fac = current["factors"]
+drv = current["derivations"]
+stp = current["steps"]
+
+cl, cm, cr = st.columns([1.1, 1.2, 1.1])
+
+# ── 左列: 生データ → 係数の導出 ──────────────
 with cl:
-    st.markdown("#### ［ MRG 構成要素 ］")
-    fac = current["factors"]
-    st.markdown(
-        "| パラメータ | 実測値 | 係数 |\n"
-        "| :--- | ---: | ---: |\n"
-        f"| **Conflict** | {current['conflict']} | **× {fac['c']}** |\n"
-        f"| **Energy**   | ${current['oil']} | **× {fac['o']}** |\n"
-        f"| **Defense**  | {current['iron']}% | **× {fac['i']}** |\n"
-        f"| **Press**    | API 連携 | **× {fac['p']}** |"
-    )
+    st.markdown("**① 係数の導出**")
+    st.markdown(f"""
+<div class="calc-panel">
+<span class="calc-label">CONFLICT INDEX</span><br>
+<span class="calc-eq">&nbsp;&nbsp;式 : {drv['c']}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;   = </span><span class="calc-coef">{fac['c']}</span>
+<br><br>
+<span class="calc-label">ENERGY (Brent Oil)</span><br>
+<span class="calc-eq">&nbsp;&nbsp;式 : {drv['o']}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;   = </span><span class="calc-coef">{fac['o']}</span>
+<br><br>
+<span class="calc-label">DEFENSE (avg Δ%)</span><br>
+<span class="calc-eq">&nbsp;&nbsp;式 : {drv['i']}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;   = </span><span class="calc-coef">{fac['i']}</span>
+<br><br>
+<span class="calc-label">PRESS FACTOR</span><br>
+<span class="calc-eq">&nbsp;&nbsp;式 : {drv['p']}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;   = </span><span class="calc-coef">{fac['p']}</span>
+</div>
+""", unsafe_allow_html=True)
 
+# ── 中列: 係数を順番に掛け合わせる ───────────
+with cm:
+    st.markdown("**② 累積乗算**")
+    st.markdown(f"""
+<div class="calc-panel">
+<span class="calc-label">BASE UNIT</span><br>
+<span class="calc-step">&nbsp;&nbsp;$ {stp['s0']:.4f}</span>
+<br><br>
+<span class="calc-label">× Conflict ({fac['c']})</span><br>
+<span class="calc-eq">&nbsp;&nbsp;{stp['s0']:.4f} × {fac['c']}</span><br>
+<span class="calc-step">&nbsp;&nbsp;= $ {stp['s1']:.4f}</span>
+<br><br>
+<span class="calc-label">× Energy ({fac['o']})</span><br>
+<span class="calc-eq">&nbsp;&nbsp;{stp['s1']:.4f} × {fac['o']}</span><br>
+<span class="calc-step">&nbsp;&nbsp;= $ {stp['s2']:.4f}</span>
+<br><br>
+<span class="calc-label">× Defense ({fac['i']})</span><br>
+<span class="calc-eq">&nbsp;&nbsp;{stp['s2']:.4f} × {fac['i']}</span><br>
+<span class="calc-step">&nbsp;&nbsp;= $ {stp['s3']:.4f}</span>
+<br><br>
+<span class="calc-label">× Press ({fac['p']})</span><br>
+<span class="calc-eq">&nbsp;&nbsp;{stp['s3']:.4f} × {fac['p']}</span><br>
+<span class="calc-step">&nbsp;&nbsp;= $ {stp['s4']:.4f}</span>
+</div>
+""", unsafe_allow_html=True)
+
+# ── 右列: 最終換算 ────────────────────────────
 with cr:
-    st.markdown("#### ［ 算出プロセス ］")
-    s1 = CONFIG["BASE_UNIT"] * fac["c"]
-    s2 = s1 * fac["o"]
-    s3 = s2 * fac["i"]
-    s4 = s3 * fac["p"]
-    log_txt = (
-        f"Base Unit         $ 1.0000\n"
-        f"× Conflict Adj  → $ {s1:.4f}\n"
-        f"× Energy Adj    → $ {s2:.4f}\n"
-        f"× Defense Adj   → $ {s3:.4f}\n"
-        f"× Press Adj     → $ {s4:.4f}  (MRG/USD)\n"
-        f"× FX Rate       → ¥ {current['morg_jpy']:,}  (MRG/JPY)"
-    )
-    st.code(log_txt, language="bash")
+    st.markdown("**③ 最終換算**")
+    st.markdown(f"""
+<div class="calc-panel">
+<span class="calc-label">MRG/USD (Close)</span><br>
+<span class="calc-final">&nbsp;&nbsp;$ {current['close']:.4f}</span>
+<br><br>
+<span class="calc-label">USD/JPY レート</span><br>
+<span class="calc-raw">&nbsp;&nbsp;¥ {current['fx_rate']}</span>
+<br><br>
+<span class="calc-label">換算式</span><br>
+<span class="calc-eq">&nbsp;&nbsp;{current['close']:.4f}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;&nbsp;&nbsp;× {current['fx_rate']}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;= {current['close'] * current['fx_rate']:.2f}</span>
+<br><br>
+<span class="calc-divider">──────────────────</span><br>
+<span class="calc-label">MRG/JPY (Close)</span><br>
+<span class="calc-jpy">&nbsp;&nbsp;¥ {current['morg_jpy']:,}</span>
+<br><br>
+<span class="calc-label">OHLC (15m足)</span><br>
+<span class="calc-eq">&nbsp;&nbsp;O: $ {current['open']:.4f}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;H: $ {current['high']:.4f}</span><br>
+<span class="calc-eq">&nbsp;&nbsp;L: $ {current['low']:.4f}</span><br>
+<span class="calc-step">&nbsp;&nbsp;C: $ {current['close']:.4f}</span>
+</div>
+""", unsafe_allow_html=True)
 
 st.write("---")
 
@@ -436,7 +533,11 @@ st.write("---")
 gl, gr = st.columns([2, 1])
 
 with gl:
-    st.markdown("#### ［ MRG 市場ボラティリティ ］")
+    st.markdown(
+        "#### ［ MRG 市場ボラティリティ ］"
+        '<span class="sim-badge">▲ SIMULATION — Close値のみ実計算</span>',
+        unsafe_allow_html=True,
+    )
     fig = go.Figure(data=[go.Candlestick(
         x=df["time"],
         open=df["open"], high=df["high"], low=df["low"], close=df["close"],
@@ -457,28 +558,35 @@ with gl:
             fixedrange=False,
             tickformat=".4f",
             gridcolor="#161616",
-            tickfont=dict(family="Share Tech Mono", size=10),
+            tickfont=dict(family="Share Tech Mono", size=10, color="#aaaaaa"),
         ),
         xaxis=dict(
             rangeslider_visible=False,
             gridcolor="#161616",
-            tickfont=dict(family="Share Tech Mono", size=10),
+            tickfont=dict(family="Share Tech Mono", size=9, color="#aaaaaa"),
         ),
-        legend=dict(font=dict(family="Share Tech Mono")),
+        legend=dict(font=dict(family="Share Tech Mono", color="#cccccc")),
     )
     st.plotly_chart(fig, use_container_width=True)
 
 with gr:
     st.markdown("#### ［ 個別推移 ］")
 
-    for label, col, color in [
-        ("CONFLICT INDEX", "conflict", "#ff5050"),
-        ("DEFENSE (%) ",   "iron",     "#ffaa00"),
-        ("OIL PRICE",      "oil",      "#50aaff"),
+    # 係数値の推移も表示できるよう df を拡張
+    df["c_factor"] = df["factors"].apply(lambda x: x["c"])
+    df["o_factor"] = df["factors"].apply(lambda x: x["o"])
+    df["i_factor"] = df["factors"].apply(lambda x: x["i"])
+
+    for label, raw_col, fac_col, color in [
+        ("CONFLICT INDEX → 係数C", "conflict", "c_factor", "#ff6b6b"),
+        ("DEFENSE Δ% → 係数I",     "iron",     "i_factor", "#fbbf24"),
+        ("OIL PRICE → 係数O",      "oil",      "o_factor", "#60a5fa"),
     ]:
         st.caption(label)
-        series = df.set_index("time")[col]
-        st.line_chart(series, height=105, color=color)
+        chart_df = df.set_index("time")[[raw_col, fac_col]].rename(
+            columns={raw_col: "実測値", fac_col: "係数"}
+        )
+        st.line_chart(chart_df, height=110, color=[color, "#ffffff"])
 
 # ─────────────────────────────────────────────
 # 12. 自動更新
